@@ -1,0 +1,14 @@
+<html>
+<body style="background:#111;color:#fff;text-align:center;">
+<h1>♟️ Xadrez Multiplayer</h1>
+<input id="room" placeholder="Sala">
+<button onclick="go()">Entrar</button>
+
+<script>
+function go(){
+  const r = document.getElementById('room').value;
+  location.href = '/game/' + r;
+}
+</script>
+</body>
+</html>

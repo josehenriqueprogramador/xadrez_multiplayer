@@ -1,0 +1,30 @@
+<html>
+<body style="background:#222;color:#fff;text-align:center;">
+<h2>Sala: {{room}}</h2>
+
+<div id="board"></div>
+
+<script>
+const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${protocol}://${location.host}/ws/{{room}}`);
+
+ws.onmessage = e => {
+  const data = JSON.parse(e.data);
+  document.getElementById("board").innerHTML = data.board;
+};
+
+let selected = null;
+
+document.addEventListener("click", e=>{
+  if(e.target.dataset.square){
+    if(!selected){
+      selected = e.target.dataset.square;
+    } else {
+      ws.send(selected + e.target.dataset.square);
+      selected = null;
+    }
+  }
+});
+</script>
+</body>
+</html>
