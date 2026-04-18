@@ -1,17 +1,61 @@
 <html>
 <body style="background:#222;color:#fff;text-align:center;">
+
 <h2>Sala: {{room}}</h2>
 
-<div id="board"></div>
+<div style="display:flex; justify-content:center;">
+
+  <div id="board"></div>
+
+  <div style="width:60px;height:400px;margin-left:10px;border:1px solid #555;position:relative;">
+    <div id="whiteBar" style="position:absolute;bottom:0;width:100%;background:#fff;"></div>
+    <div id="blackBar" style="position:absolute;top:0;width:100%;background:#000;"></div>
+  </div>
+
+</div>
+
+<canvas id="chart" width="400" height="150"></canvas>
+
+<div id="moves"></div>
 
 <script>
 const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 const ws = new WebSocket(`${protocol}://${location.host}/ws/{{room}}`);
 
+const ctx = document.getElementById("chart").getContext("2d");
+
 ws.onmessage = e => {
   const data = JSON.parse(e.data);
+
   document.getElementById("board").innerHTML = data.board;
+
+  const prob = data.prob;
+  document.getElementById("whiteBar").style.height = (prob*100)+"%";
+  document.getElementById("blackBar").style.height = ((1-prob)*100)+"%";
+
+  drawChart(data.evals);
+  renderMoves(data.history);
 };
+
+function drawChart(evals){
+  ctx.clearRect(0,0,400,150);
+
+  ctx.beginPath();
+  evals.forEach((v,i)=>{
+    let y = 75 - v/10;
+    if(i===0) ctx.moveTo(i*10,y);
+    else ctx.lineTo(i*10,y);
+  });
+  ctx.stroke();
+}
+
+function renderMoves(history){
+  let html = "<h3>Jogadas</h3>";
+  history.forEach(h=>{
+    html += `<div>${h.move} - ${h.label}</div>`;
+  });
+  document.getElementById("moves").innerHTML = html;
+}
 
 let selected = null;
 
@@ -26,5 +70,6 @@ document.addEventListener("click", e=>{
   }
 });
 </script>
+
 </body>
 </html>

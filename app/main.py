@@ -7,7 +7,7 @@ import chess.svg
 
 from app.arena import initial_state, apply_move
 from app.manager import RoomManager
-from app.engine import get_ai_move
+from app.engine import evaluate_position, classify_move
 
 app = FastAPI()
 templates = Jinja2Templates(directory="app/templates")
@@ -28,6 +28,8 @@ async def ws(websocket: WebSocket, room_id: str):
 
     if not room["state"]:
         room["state"] = initial_state()
+        room["history"] = []
+        room["evals"] = []
 
     room["connections"].append(websocket)
 
@@ -35,9 +37,15 @@ async def ws(websocket: WebSocket, room_id: str):
         board = chess.Board(room["state"]["fen"])
         svg = chess.svg.board(board=board)
 
+        prob, cp = evaluate_position(room["state"]["fen"])
+        room["evals"].append(cp)
+
         data = {
             "state": room["state"],
-            "board": svg
+            "board": svg,
+            "prob": prob,
+            "evals": room["evals"],
+            "history": room["history"]
         }
 
         alive = []
@@ -55,10 +63,19 @@ async def ws(websocket: WebSocket, room_id: str):
         while True:
             move = await websocket.receive_text()
 
+            board = chess.Board(room["state"]["fen"])
+            prob_before, cp_before = evaluate_position(room["state"]["fen"])
+
             if apply_move(room["state"], move):
-                if room["state"]["modo"] == "ai" and not room["state"]["vitoria"]:
-                    ai_move = get_ai_move(room["state"]["fen"])
-                    apply_move(room["state"], ai_move)
+                prob_after, cp_after = evaluate_position(room["state"]["fen"])
+
+                label = classify_move(cp_before, cp_after)
+
+                room["history"].append({
+                    "move": move,
+                    "eval": cp_after,
+                    "label": label
+                })
 
                 await broadcast()
 
