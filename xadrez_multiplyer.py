@@ -1,7 +1,6 @@
 import os
 import urllib.parse
 import json
-import base64
 import chess
 import chess.svg
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -16,8 +15,8 @@ class ChessArena:
     def get_initial_state(self):
         return {
             "fen": chess.Board().fen(),
-            "p1": {"nome": None, "sid": None, "cor": "Brancas"},
-            "p2": {"nome": None, "sid": None, "cor": "Pretas"},
+            "p1": {"nome": None, "sid": None},
+            "p2": {"nome": None, "sid": None},
             "turno": "w",
             "vitoria": False
         }
@@ -30,6 +29,7 @@ class ChessArena:
         sid = str(id(websocket))
         state = self.rooms[room_id]["state"]
 
+        # Atribuição fixa: P1 é o primeiro, P2 é o segundo
         if not state["p1"]["sid"]:
             state["p1"].update({"nome": name, "sid": sid})
         elif not state["p2"]["sid"] and state["p1"]["sid"] != sid:
@@ -42,6 +42,8 @@ class ChessArena:
         if room_id not in self.rooms: return
         room = self.rooms[room_id]
         board = chess.Board(room["state"]["fen"])
+        
+        # Gera o SVG - Se você for o P2 (Pretas), podemos rotacionar o tabuleiro no futuro
         svg_data = chess.svg.board(board=board, size=400)
 
         for conn in room["connections"]:
@@ -65,16 +67,16 @@ async def index():
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
-                body { background: #1a1a1a; color: #fff; font-family: sans-serif; text-align: center; padding-top: 50px; }
-                input { padding: 12px; margin: 10px; width: 80%; max-width: 300px; border-radius: 5px; border: none; }
-                button { padding: 15px; width: 85%; max-width: 300px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+                body { background: #1a1a1a; color: #fff; font-family: sans-serif; text-align: center; padding: 50px 20px; }
+                input { padding: 15px; margin: 10px; width: 100%; max-width: 300px; border-radius: 8px; border: none; font-size: 16px; }
+                button { padding: 15px; width: 100%; max-width: 300px; background: #4CAF50; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
             </style>
         </head>
         <body>
             <h1>♟️ Xadrez Real-Time</h1>
             <input type="text" id="nome" placeholder="Seu Nome"><br>
             <input type="text" id="sala" placeholder="ID da Sala"><br>
-            <button onclick="entrar()">ENTRAR NA SALA</button>
+            <button onclick="entrar()">JOGAR</button>
             <script>
                 function entrar() {
                     const n = document.getElementById('nome').value;
@@ -93,21 +95,30 @@ async def game_page(room_id: str, nome: str):
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
-                body {{ background: #222; color: #eee; font-family: monospace; text-align: center; margin: 0; }}
+                body {{ background: #222; color: #eee; font-family: sans-serif; text-align: center; margin: 0; }}
+                .players-info {{ display: flex; justify-content: space-around; padding: 10px; background: #333; font-size: 14px; }}
+                .player-box {{ padding: 5px 10px; border-radius: 4px; }}
+                .active-turn {{ background: #4CAF50; color: white; }}
                 #board-container {{ margin: 20px auto; width: 340px; height: 340px; position: relative; border: 2px solid #555; }}
                 #board-container svg {{ width: 100%; height: 100%; }}
-                .overlay {{ position: absolute; top: 0; left: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; height: 100%; }}
-                .square {{ border: 1px solid transparent; box-sizing: border-box; }}
+                .overlay {{ position: absolute; top: 0; left: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; height: 100%; z-index: 10; }}
+                .square {{ cursor: pointer; }}
                 .selected {{ background: rgba(255, 255, 0, 0.4) !important; }}
-                .status-bar {{ padding: 15px; font-weight: bold; background: #333; }}
+                .status-bar {{ padding: 15px; font-weight: bold; background: #444; }}
             </style>
         </head>
         <body>
+            <div class="players-info">
+                <div id="p1-display" class="player-box">Brancas: Aguardando...</div>
+                <div id="p2-display" class="player-box">Pretas: Aguardando...</div>
+            </div>
             <div class="status-bar" id="status">Conectando...</div>
+            
             <div id="board-container">
                 <div id="svg-target"></div>
                 <div class="overlay" id="click-grid"></div>
             </div>
+
             <script>
                 let mySid = null;
                 let selectedSquare = null;
@@ -128,17 +139,28 @@ async def game_page(room_id: str, nome: str):
                 socket.onmessage = function(e) {{
                     const data = JSON.parse(e.data);
                     if(!mySid) mySid = data.your_sid;
+                    
                     document.getElementById('svg-target').innerHTML = data.board_svg;
+                    
                     const state = data.state;
                     const isP1 = state.p1.sid === mySid;
                     const isP2 = state.p2.sid === mySid;
                     const meuTurno = (state.turno === 'w' && isP1) || (state.turno === 'b' && isP2);
+
+                    // Atualiza nomes dos jogadores
+                    document.getElementById('p1-display').innerText = "⚪ " + (state.p1.nome || "Aguardando...");
+                    document.getElementById('p2-display').innerText = "⚫ " + (state.p2.nome || "Aguardando...");
+                    
+                    // Destaca quem está jogando
+                    document.getElementById('p1-display').className = "player-box " + (state.turno === 'w' ? "active-turn" : "");
+                    document.getElementById('p2-display').className = "player-box " + (state.turno === 'b' ? "active-turn" : "");
+
                     const status = document.getElementById('status');
                     if(!data.is_full) {{
                         status.innerText = "AGUARDANDO OPONENTE...";
                     }} else {{
-                        status.innerText = meuTurno ? "SUA VEZ!" : "AGUARDE O OPONENTE";
-                        status.style.color = meuTurno ? "#0f0" : "#f00";
+                        status.innerText = meuTurno ? "SUA VEZ!" : "VEZ DO OPONENTE";
+                        status.style.color = meuTurno ? "#0f0" : "#ff4444";
                     }}
                 }};
 
@@ -169,7 +191,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
             room = arena.rooms[room_id]
             state = room["state"]
             board = chess.Board(state["fen"])
-            is_p1, is_p2 = state["p1"]["sid"] == sid, state["p2"]["sid"] == sid
+            
+            is_p1 = state["p1"]["sid"] == sid
+            is_p2 = state["p2"]["sid"] == sid
             meu_turno = (board.turn == chess.WHITE and is_p1) or (board.turn == chess.BLACK and is_p2)
 
             if meu_turno:
@@ -182,6 +206,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
                         await arena.broadcast(room_id)
                 except: pass
     except WebSocketDisconnect:
+        # Opcional: Limpar sid se o jogador sair
         pass
 
 if __name__ == "__main__":
