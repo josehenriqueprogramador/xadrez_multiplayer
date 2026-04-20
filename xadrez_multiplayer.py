@@ -28,15 +28,16 @@ class ChessArena:
 
         room = self.rooms[room_id]
         
-        # REGRA: Bloqueia se o nome já estiver na sala
+        # Bloqueia se o nome já estiver na sala para evitar clones
         if any(conn["name"] == name for conn in room["connections"]):
-            await websocket.send_text(json.dumps({"error": "Você já está nesta sala em outra aba!"}))
+            await websocket.send_text(json.dumps({"error": "Você já está nesta sala!"}))
             await websocket.close()
             return None
 
         sid = str(id(websocket))
         state = room["state"]
 
+        # Atribuição de lugares
         if not state["p1"]["sid"]:
             state["p1"].update({"nome": name, "sid": sid})
         elif not state["p2"]["sid"]:
@@ -49,9 +50,14 @@ class ChessArena:
         if room_id not in self.rooms: return
         room = self.rooms[room_id]
         board = chess.Board(room["state"]["fen"])
-        svg_data = chess.svg.board(board=board, size=400)
 
         for conn in room["connections"]:
+            # LÓGICA DE INVERSÃO: Se for o P2 (Pretas), rotaciona o tabuleiro
+            is_p2 = (conn["sid"] == room["state"]["p2"]["sid"])
+            orientacao = chess.BLACK if is_p2 else chess.WHITE
+            
+            svg_data = chess.svg.board(board=board, size=400, orientation=orientacao)
+
             data = {
                 "state": room["state"],
                 "board_svg": svg_data,
@@ -101,12 +107,11 @@ async def game_page(room_id: str, nome: str):
             <style>
                 body {{ background: #222; color: #eee; font-family: sans-serif; text-align: center; margin: 0; }}
                 .header-game {{ display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #333; }}
-                .players-info {{ display: flex; gap: 10px; }}
                 .player-box {{ padding: 5px 10px; border-radius: 4px; font-size: 12px; border: 1px solid #555; }}
                 .active-turn {{ background: #4CAF50; color: white; border-color: #4CAF50; }}
-                .btn-sair {{ background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; }}
+                .btn-sair {{ background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }}
                 #board-container {{ margin: 20px auto; width: 340px; height: 340px; position: relative; border: 2px solid #555; }}
-                #board-container svg {{ width: 100%; height: 100%; }}
+                #board-container svg {{ width: 100%; height: 100%; pointer-events: none; }}
                 .overlay {{ position: absolute; top: 0; left: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; height: 100%; z-index: 10; }}
                 .square {{ cursor: pointer; }}
                 .selected {{ background: rgba(255, 255, 0, 0.4) !important; }}
@@ -115,19 +120,15 @@ async def game_page(room_id: str, nome: str):
         </head>
         <body>
             <div class="header-game">
-                <div class="players-info">
-                    <div id="p1-display" class="player-box">⚪ ...</div>
-                    <div id="p2-display" class="player-box">⚫ ...</div>
-                </div>
+                <div id="p1-display" class="player-box">⚪ ...</div>
+                <div id="p2-display" class="player-box">⚫ ...</div>
                 <button class="btn-sair" onclick="location.href='/'">SAIR</button>
             </div>
             <div class="status-bar" id="status">Conectando...</div>
-            
             <div id="board-container">
                 <div id="svg-target"></div>
                 <div class="overlay" id="click-grid"></div>
             </div>
-
             <script>
                 let mySid = null;
                 let selectedSquare = null;
@@ -147,30 +148,23 @@ async def game_page(room_id: str, nome: str):
 
                 socket.onmessage = function(e) {{
                     const data = JSON.parse(e.data);
-                    
-                    if(data.error) {{
-                        alert(data.error);
-                        location.href = '/';
-                        return;
-                    }}
-
+                    if(data.error) {{ alert(data.error); location.href='/'; return; }}
                     if(!mySid) mySid = data.your_sid;
-                    document.getElementById('svg-target').innerHTML = data.board_svg;
                     
+                    document.getElementById('svg-target').innerHTML = data.board_svg;
                     const state = data.state;
                     const isP1 = state.p1.sid === mySid;
                     const isP2 = state.p2.sid === mySid;
                     const meuTurno = (state.turno === 'w' && isP1) || (state.turno === 'b' && isP2);
 
-                    document.getElementById('p1-display').innerText = "⚪ " + (state.p1.nome || "Aguardando...");
-                    document.getElementById('p2-display').innerText = "⚫ " + (state.p2.nome || "Aguardando...");
+                    document.getElementById('p1-display').innerText = "⚪ " + (state.p1.nome || "...");
+                    document.getElementById('p2-display').innerText = "⚫ " + (state.p2.nome || "...");
                     document.getElementById('p1-display').className = "player-box " + (state.turno === 'w' ? "active-turn" : "");
                     document.getElementById('p2-display').className = "player-box " + (state.turno === 'b' ? "active-turn" : "");
 
                     const status = document.getElementById('status');
-                    if(!data.is_full) {{
-                        status.innerText = "AGUARDANDO OPONENTE...";
-                    }} else {{
+                    if(!data.is_full) status.innerText = "AGUARDANDO OPONENTE...";
+                    else {{
                         status.innerText = meuTurno ? "SUA VEZ!" : "VEZ DO OPONENTE";
                         status.style.color = meuTurno ? "#0f0" : "#ff4444";
                     }}
@@ -196,7 +190,7 @@ async def game_page(room_id: str, nome: str):
 async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: str):
     name = urllib.parse.unquote(player_name)
     sid = await arena.connect(websocket, room_id, name)
-    if not sid: return # Encerra se houver erro de duplicata
+    if not sid: return
 
     await arena.broadcast(room_id)
     try:
@@ -206,7 +200,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
             state = room["state"]
             board = chess.Board(state["fen"])
             
-            is_p1, is_p2 = state["p1"]["sid"] == sid, state["p2"]["sid"] == sid
+            is_p1 = state["p1"]["sid"] == sid
+            is_p2 = state["p2"]["sid"] == sid
             meu_turno = (board.turn == chess.WHITE and is_p1) or (board.turn == chess.BLACK and is_p2)
 
             if meu_turno:
@@ -219,13 +214,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
                         await arena.broadcast(room_id)
                 except: pass
     except WebSocketDisconnect:
-        # Ao desconectar, remove o SID do estado para permitir nova entrada
         room = arena.rooms.get(room_id)
         if room:
-            state = room["state"]
-            if state["p1"]["sid"] == sid: state["p1"].update({"nome": None, "sid": None})
-            if state["p2"]["sid"] == sid: state["p2"].update({"nome": None, "sid": None})
-            # Remove a conexão da lista
+            if room["state"]["p1"]["sid"] == sid: room["state"]["p1"].update({"nome": None, "sid": None})
+            if room["state"]["p2"]["sid"] == sid: room["state"]["p2"].update({"nome": None, "sid": None})
             room["connections"] = [c for c in room["connections"] if c["sid"] != sid]
             await arena.broadcast(room_id)
 
