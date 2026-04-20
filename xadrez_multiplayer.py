@@ -26,24 +26,29 @@ class ChessArena:
         if room_id not in self.rooms:
             self.rooms[room_id] = {"connections": [], "state": self.get_initial_state()}
 
-        sid = str(id(websocket))
-        state = self.rooms[room_id]["state"]
+        room = self.rooms[room_id]
+        
+        # REGRA: Bloqueia se o nome já estiver na sala
+        if any(conn["name"] == name for conn in room["connections"]):
+            await websocket.send_text(json.dumps({"error": "Você já está nesta sala em outra aba!"}))
+            await websocket.close()
+            return None
 
-        # Atribuição fixa: P1 é o primeiro, P2 é o segundo
+        sid = str(id(websocket))
+        state = room["state"]
+
         if not state["p1"]["sid"]:
             state["p1"].update({"nome": name, "sid": sid})
-        elif not state["p2"]["sid"] and state["p1"]["sid"] != sid:
+        elif not state["p2"]["sid"]:
             state["p2"].update({"nome": name, "sid": sid})
 
-        self.rooms[room_id]["connections"].append({"ws": websocket, "sid": sid, "name": name})
+        room["connections"].append({"ws": websocket, "sid": sid, "name": name})
         return sid
 
     async def broadcast(self, room_id: str):
         if room_id not in self.rooms: return
         room = self.rooms[room_id]
         board = chess.Board(room["state"]["fen"])
-        
-        # Gera o SVG - Se você for o P2 (Pretas), podemos rotacionar o tabuleiro no futuro
         svg_data = chess.svg.board(board=board, size=400)
 
         for conn in room["connections"]:
@@ -55,8 +60,7 @@ class ChessArena:
             }
             try:
                 await conn["ws"].send_text(json.dumps(data))
-            except:
-                pass
+            except: pass
 
 arena = ChessArena()
 
@@ -96,9 +100,11 @@ async def game_page(room_id: str, nome: str):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
                 body {{ background: #222; color: #eee; font-family: sans-serif; text-align: center; margin: 0; }}
-                .players-info {{ display: flex; justify-content: space-around; padding: 10px; background: #333; font-size: 14px; }}
-                .player-box {{ padding: 5px 10px; border-radius: 4px; }}
-                .active-turn {{ background: #4CAF50; color: white; }}
+                .header-game {{ display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #333; }}
+                .players-info {{ display: flex; gap: 10px; }}
+                .player-box {{ padding: 5px 10px; border-radius: 4px; font-size: 12px; border: 1px solid #555; }}
+                .active-turn {{ background: #4CAF50; color: white; border-color: #4CAF50; }}
+                .btn-sair {{ background: #f44336; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; }}
                 #board-container {{ margin: 20px auto; width: 340px; height: 340px; position: relative; border: 2px solid #555; }}
                 #board-container svg {{ width: 100%; height: 100%; }}
                 .overlay {{ position: absolute; top: 0; left: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: 100%; height: 100%; z-index: 10; }}
@@ -108,9 +114,12 @@ async def game_page(room_id: str, nome: str):
             </style>
         </head>
         <body>
-            <div class="players-info">
-                <div id="p1-display" class="player-box">Brancas: Aguardando...</div>
-                <div id="p2-display" class="player-box">Pretas: Aguardando...</div>
+            <div class="header-game">
+                <div class="players-info">
+                    <div id="p1-display" class="player-box">⚪ ...</div>
+                    <div id="p2-display" class="player-box">⚫ ...</div>
+                </div>
+                <button class="btn-sair" onclick="location.href='/'">SAIR</button>
             </div>
             <div class="status-bar" id="status">Conectando...</div>
             
@@ -138,8 +147,14 @@ async def game_page(room_id: str, nome: str):
 
                 socket.onmessage = function(e) {{
                     const data = JSON.parse(e.data);
-                    if(!mySid) mySid = data.your_sid;
                     
+                    if(data.error) {{
+                        alert(data.error);
+                        location.href = '/';
+                        return;
+                    }}
+
+                    if(!mySid) mySid = data.your_sid;
                     document.getElementById('svg-target').innerHTML = data.board_svg;
                     
                     const state = data.state;
@@ -147,11 +162,8 @@ async def game_page(room_id: str, nome: str):
                     const isP2 = state.p2.sid === mySid;
                     const meuTurno = (state.turno === 'w' && isP1) || (state.turno === 'b' && isP2);
 
-                    // Atualiza nomes dos jogadores
                     document.getElementById('p1-display').innerText = "⚪ " + (state.p1.nome || "Aguardando...");
                     document.getElementById('p2-display').innerText = "⚫ " + (state.p2.nome || "Aguardando...");
-                    
-                    // Destaca quem está jogando
                     document.getElementById('p1-display').className = "player-box " + (state.turno === 'w' ? "active-turn" : "");
                     document.getElementById('p2-display').className = "player-box " + (state.turno === 'b' ? "active-turn" : "");
 
@@ -184,6 +196,8 @@ async def game_page(room_id: str, nome: str):
 async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: str):
     name = urllib.parse.unquote(player_name)
     sid = await arena.connect(websocket, room_id, name)
+    if not sid: return # Encerra se houver erro de duplicata
+
     await arena.broadcast(room_id)
     try:
         while True:
@@ -192,8 +206,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
             state = room["state"]
             board = chess.Board(state["fen"])
             
-            is_p1 = state["p1"]["sid"] == sid
-            is_p2 = state["p2"]["sid"] == sid
+            is_p1, is_p2 = state["p1"]["sid"] == sid, state["p2"]["sid"] == sid
             meu_turno = (board.turn == chess.WHITE and is_p1) or (board.turn == chess.BLACK and is_p2)
 
             if meu_turno:
@@ -206,8 +219,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
                         await arena.broadcast(room_id)
                 except: pass
     except WebSocketDisconnect:
-        # Opcional: Limpar sid se o jogador sair
-        pass
+        # Ao desconectar, remove o SID do estado para permitir nova entrada
+        room = arena.rooms.get(room_id)
+        if room:
+            state = room["state"]
+            if state["p1"]["sid"] == sid: state["p1"].update({"nome": None, "sid": None})
+            if state["p2"]["sid"] == sid: state["p2"].update({"nome": None, "sid": None})
+            # Remove a conexão da lista
+            room["connections"] = [c for c in room["connections"] if c["sid"] != sid]
+            await arena.broadcast(room_id)
 
 if __name__ == "__main__":
     import uvicorn
